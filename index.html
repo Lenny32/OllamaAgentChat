@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ollama Debate Room</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="header-grid">
+      <div class="header-row global-row">
+        <div class="brand">Debate Room</div>
+        <label class="field theme-field">
+          <span>Theme</span>
+          <textarea id="themeInput" rows="1" placeholder="Enter a topic for the two models"></textarea>
+        </label>
+        <label class="field mini">
+          <span>Initial Turns</span>
+          <input id="initialTurns" type="number" min="1" max="50" value="6" />
+        </label>
+        <label class="field mini">
+          <span>Max Extensions</span>
+          <input id="maxExtensions" type="number" min="0" max="10" value="3" />
+        </label>
+        <button id="refreshModelsBtn" class="secondary" type="button">Refresh Models</button>
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" class="secondary" disabled>Stop</button>
+      </div>
+
+      <div class="header-row agent-row">
+        <div class="row-label">Left Agent</div>
+        <label class="field small">
+          <span>Name</span>
+          <input id="leftDisplayName" type="text" value="Analyst Left" />
+        </label>
+        <label class="field medium">
+          <span>Model</span>
+          <select id="leftModel"></select>
+        </label>
+        <label class="field behavior-field">
+          <span>Agent Prompt (optional)</span>
+          <input id="leftAgentPrompt" type="text" placeholder="e.g. You are skeptical and technical. Challenge weak assumptions." />
+        </label>
+      </div>
+
+      <div class="header-row agent-row">
+        <div class="row-label">Right Agent</div>
+        <label class="field small">
+          <span>Name</span>
+          <input id="rightDisplayName" type="text" value="Analyst Right" />
+        </label>
+        <label class="field medium">
+          <span>Model</span>
+          <select id="rightModel"></select>
+        </label>
+        <label class="field behavior-field">
+          <span>Agent Prompt (optional)</span>
+          <input id="rightAgentPrompt" type="text" placeholder="e.g. You are pragmatic. Focus on implementation tradeoffs." />
+        </label>
+      </div>
+
+      <div class="header-row agent-row">
+        <div class="row-label">Review Agent</div>
+        <div class="spacer"></div>
+        <label class="field medium">
+          <span>Model</span>
+          <select id="reviewModel"></select>
+        </label>
+        <label class="field behavior-field">
+          <span>Agent Prompt (optional)</span>
+          <input id="reviewAgentPrompt" type="text" placeholder="e.g. You are an editor. Produce a clear, structured synthesis." />
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section id="chat" class="chat" aria-live="polite"></section>
+    <aside class="side">
+      <h2>Run State</h2>
+      <p><strong>Status:</strong> <span id="status">Idle</span></p>
+      <p><strong>Current block:</strong> <span id="blockTurns">-</span></p>
+      <p><strong>Total turns:</strong> <span id="totalTurns">0</span></p>
+      <p><strong>Extensions used:</strong> <span id="extensionCount">0</span></p>
+      <p><strong>Last outcome:</strong> <span id="lastOutcome">-</span></p>
+      <h3>Final Review</h3>
+      <textarea id="finalReview" class="review" readonly placeholder="Generated at the end of a completed run"></textarea>
+      <pre id="log" class="log"></pre>
+    </aside>
+  </main>
+
+  <template id="msgTpl">
+    <article class="message">
+      <div class="meta"></div>
+      <div class="bubble"></div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
