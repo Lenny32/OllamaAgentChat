@@ -16,6 +16,14 @@
           <textarea id="themeInput" rows="1" placeholder="Enter a topic for the two models"></textarea>
         </label>
         <label class="field mini">
+          <span>Mode</span>
+          <select id="interactionMode">
+            <option value="open" selected>Open</option>
+            <option value="debate">Debate</option>
+            <option value="collaboration">Collaboration</option>
+          </select>
+        </label>
+        <label class="field mini">
           <span>Initial Turns</span>
           <input id="initialTurns" type="number" min="1" max="50" value="6" />
         </label>
@@ -24,6 +32,7 @@
           <input id="maxExtensions" type="number" min="0" max="10" value="3" />
         </label>
         <button id="refreshModelsBtn" class="secondary" type="button">Refresh Models</button>
+        <button id="downloadJsonBtn" class="secondary" type="button" disabled>Download JSON</button>
         <button id="startBtn">Start</button>
         <button id="stopBtn" class="secondary" disabled>Stop</button>
       </div>
@@ -60,9 +69,12 @@
         </label>
       </div>
 
-      <div class="header-row agent-row">
+      <div id="reviewAgentRow" class="header-row agent-row">
         <div class="row-label">Review Agent</div>
-        <div class="spacer"></div>
+        <label class="field small">
+          <span>Enabled</span>
+          <input id="reviewEnabled" type="checkbox" />
+        </label>
         <label class="field medium">
           <span>Model</span>
           <select id="reviewModel"></select>
@@ -100,3 +112,5 @@
   <script src="app.js"></script>
 </body>
 </html>
+
+

@@ -46,7 +46,7 @@ body {
 }
 
 .global-row {
-  grid-template-columns: auto minmax(280px, 1fr) 98px 98px auto auto auto;
+  grid-template-columns: auto minmax(240px, 1fr) 96px 98px 98px auto auto auto auto;
 }
 
 .agent-row {
@@ -94,6 +94,14 @@ body {
   font-size: 13px;
 }
 
+.field input[type="checkbox"] {
+  min-height: auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
 .field textarea {
   resize: none;
   overflow: hidden;
@@ -143,6 +151,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   flex-direction: column;
   gap: 12px;
   overflow: auto;
+  scroll-behavior: smooth;
   min-height: 70vh;
 }
 
@@ -194,6 +203,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .log {
   max-height: 30vh;
   overflow: auto;
+  scroll-behavior: smooth;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
@@ -203,7 +213,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 @media (max-width: 1300px) {
   .global-row {
-    grid-template-columns: auto minmax(260px, 1fr) 98px 98px auto auto;
+    grid-template-columns: auto minmax(220px, 1fr) 96px 98px 98px auto auto;
   }
 
   .global-row #stopBtn {
@@ -238,3 +248,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
     margin-bottom: 2px;
   }
 }
+
+
+
+

@@ -1,20 +1,24 @@
 const OLLAMA_CHAT_URL = "http://localhost:11434/api/chat";
 const OLLAMA_TAGS_URL = "http://localhost:11434/api/tags";
 
-const DEFAULT_LEFT_MODEL = "qwen3:4b";
-const DEFAULT_RIGHT_MODEL = "ministral-3:3b";
+const DEFAULT_LEFT_MODEL = "gemma3:1b";
+const DEFAULT_RIGHT_MODEL = "gemma3:1b";
 
 const els = {
   theme: document.getElementById("themeInput"),
+  interactionMode: document.getElementById("interactionMode"),
   leftDisplayName: document.getElementById("leftDisplayName"),
   rightDisplayName: document.getElementById("rightDisplayName"),
   leftAgentPrompt: document.getElementById("leftAgentPrompt"),
   rightAgentPrompt: document.getElementById("rightAgentPrompt"),
   reviewAgentPrompt: document.getElementById("reviewAgentPrompt"),
+  reviewEnabled: document.getElementById("reviewEnabled"),
+  reviewAgentRow: document.getElementById("reviewAgentRow"),
   leftModel: document.getElementById("leftModel"),
   rightModel: document.getElementById("rightModel"),
   reviewModel: document.getElementById("reviewModel"),
   refreshModelsBtn: document.getElementById("refreshModelsBtn"),
+  downloadJsonBtn: document.getElementById("downloadJsonBtn"),
   initialTurns: document.getElementById("initialTurns"),
   maxExtensions: document.getElementById("maxExtensions"),
   start: document.getElementById("startBtn"),
@@ -31,6 +35,8 @@ const els = {
 };
 
 let runToken = 0;
+let autoScrollEnabled = true;
+let lastRunExport = null;
 
 els.start.addEventListener("click", () => runDebate());
 els.stop.addEventListener("click", () => {
@@ -38,13 +44,40 @@ els.stop.addEventListener("click", () => {
   setStatus("Stopping...");
 });
 els.refreshModelsBtn.addEventListener("click", () => loadModels());
+els.downloadJsonBtn.addEventListener("click", () => downloadRunJson());
+els.reviewEnabled.addEventListener("change", () => syncReviewControls());
 
 els.theme.addEventListener("focus", () => resizeThemeInput(true));
 els.theme.addEventListener("input", () => resizeThemeInput(true));
 els.theme.addEventListener("blur", () => resizeThemeInput(false));
+els.chat.addEventListener("scroll", () => {
+  autoScrollEnabled = isChatNearBottom();
+});
 
 function setStatus(value) {
   els.status.textContent = value;
+}
+
+function isChatNearBottom(thresholdPx = 24) {
+  return els.chat.scrollHeight - (els.chat.scrollTop + els.chat.clientHeight) <= thresholdPx;
+}
+
+function scrollChatToBottom(force = false) {
+  if (!force && !autoScrollEnabled) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    if (!force && !autoScrollEnabled) {
+      return;
+    }
+
+    const last = els.chat.lastElementChild;
+    if (last) {
+      last.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
+    els.chat.scrollTop = els.chat.scrollHeight;
+  });
 }
 
 function addMessage(side, author, text = "") {
@@ -53,13 +86,13 @@ function addMessage(side, author, text = "") {
   node.querySelector(".meta").textContent = author;
   node.querySelector(".bubble").textContent = text;
   els.chat.appendChild(node);
-  els.chat.scrollTop = els.chat.scrollHeight;
+  scrollChatToBottom();
   return node;
 }
 
 function updateMessage(node, text) {
   node.querySelector(".bubble").textContent = text;
-  els.chat.scrollTop = els.chat.scrollHeight;
+  scrollChatToBottom();
 }
 
 function log(text) {
@@ -80,6 +113,43 @@ function resizeThemeInput(expanded) {
   }
 }
 
+function interactionModeGuidance(mode) {
+  if (mode === "debate") {
+    return "Debate mode: respectfully challenge weak assumptions and compare alternatives.";
+  }
+
+  if (mode === "collaboration") {
+    return "Collaboration mode: align, combine ideas, and converge on practical next steps.";
+  }
+
+  return "Open mode: explore the topic freely while still responding directly to each other.";
+}
+
+function syncReviewControls() {
+  const enabled = els.reviewEnabled.checked;
+  els.reviewModel.disabled = !enabled;
+  els.reviewAgentPrompt.disabled = !enabled;
+  if (els.reviewAgentRow) {
+    els.reviewAgentRow.style.opacity = enabled ? "1" : "0.65";
+  }
+}
+function downloadRunJson() {
+  if (!lastRunExport) return;
+
+  const json = JSON.stringify(lastRunExport, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ollama-debate-${ts}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function fetchAvailableModels() {
   const res = await fetch(OLLAMA_TAGS_URL);
   if (!res.ok) {
@@ -93,10 +163,6 @@ async function fetchAvailableModels() {
     .filter(Boolean)
     .filter((v, i, arr) => arr.indexOf(v) === i)
     .sort((a, b) => a.localeCompare(b));
-
-  if (!names.length) {
-    throw new Error("No models returned by Ollama. Pull models first.");
-  }
 
   return names;
 }
@@ -126,9 +192,17 @@ async function loadModels() {
 
   try {
     const names = await fetchAvailableModels();
-    setSelectOptions(els.leftModel, names, DEFAULT_LEFT_MODEL, DEFAULT_RIGHT_MODEL);
-    setSelectOptions(els.rightModel, names, DEFAULT_RIGHT_MODEL, DEFAULT_LEFT_MODEL);
-    setSelectOptions(els.reviewModel, names, DEFAULT_LEFT_MODEL, DEFAULT_RIGHT_MODEL);
+    if (!names.length) {
+      const help = "No Ollama models found. Download at least one model with: ollama pull gemma3:1b";
+      setStatus("Error");
+      addMessage("system", "Error", help);
+      log(help);
+      return;
+    }
+
+    setSelectOptions(els.leftModel, names, DEFAULT_LEFT_MODEL, names[0]);
+    setSelectOptions(els.rightModel, names, DEFAULT_RIGHT_MODEL, names[0]);
+    setSelectOptions(els.reviewModel, names, DEFAULT_LEFT_MODEL, names[0]);
     setStatus(prevStatus === "Idle" ? "Idle" : prevStatus);
     log(`Loaded ${names.length} models from Ollama.`);
   } catch (err) {
@@ -355,11 +429,12 @@ function validateTurnOutput(text, speakerName, otherSpeakerName, agentPrompt, ot
   return { blocking, warnings };
 }
 
-function buildTurnPrompt(theme, agentPrompt, speakerName, otherSpeakerName, transcript, turnIndex) {
+function buildTurnPrompt(theme, interactionMode, agentPrompt, speakerName, otherSpeakerName, transcript, turnIndex) {
   const agentPromptTags = parseAgentPromptTags(agentPrompt);
   const agentPromptBlock = agentPromptTags.length
     ? `\nAgent prompt instructions: ${agentPromptTags.join(" | ")}`
     : "";
+  const modeBlock = `\nInteraction mode: ${interactionModeGuidance(interactionMode)}`;
   const otherLast = lastMessageByAuthor(transcript, otherSpeakerName) || "(No prior message yet)";
   const myLast = lastMessageByAuthor(transcript, speakerName) || "(No prior message yet)";
 
@@ -369,26 +444,29 @@ function buildTurnPrompt(theme, agentPrompt, speakerName, otherSpeakerName, tran
       content:
         `You are ${speakerName} in a live discussion with ${otherSpeakerName}. ` +
         "Write like a natural conversation, not a template. " +
-        "Avoid generic agreement and avoid setup phrases like 'let's begin'." +
+        "Avoid generic agreement and avoid setup phrases like 'let\'s begin'." +
+        modeBlock +
         agentPromptBlock,
     },
     {
       role: "user",
       content:
         `Theme: ${theme}\n` +
+        `Mode: ${interactionMode}\n` +
         `Turn number: ${turnIndex}\n` +
         `Latest message from ${otherSpeakerName}: ${otherLast}\n` +
         `Your previous message: ${myLast}\n` +
         "Recent transcript (last turns):\n" +
         `${transcriptWindowText(transcript) || "(No prior messages)"}\n\n` +
         `Reply directly to ${otherSpeakerName}. ` +
-        "Use 2-5 sentences, add a new angle or critique, and end with a question to keep the discussion moving.",
+        "Use 2-5 sentences, add a new angle, and end with a question to keep the discussion moving.",
     },
   ];
 }
 
 function buildRetryTurnPrompt(
   theme,
+  interactionMode,
   agentPrompt,
   speakerName,
   otherSpeakerName,
@@ -401,6 +479,7 @@ function buildRetryTurnPrompt(
   const agentPromptBlock = agentPromptTags.length
     ? `\nAgent prompt instructions: ${agentPromptTags.join(" | ")}`
     : "";
+  const modeBlock = `\nInteraction mode: ${interactionModeGuidance(interactionMode)}`;
   const otherLast = lastMessageByAuthor(transcript, otherSpeakerName) || "(No prior message yet)";
 
   return [
@@ -409,12 +488,14 @@ function buildRetryTurnPrompt(
       content:
         `You are ${speakerName}. Rewrite your previous answer as a better conversational reply to ${otherSpeakerName}. ` +
         "No rigid headings, no setup phrases, no generic agreement-only text." +
+        modeBlock +
         agentPromptBlock,
     },
     {
       role: "user",
       content:
         `Theme: ${theme}\n` +
+        `Mode: ${interactionMode}\n` +
         `Turn number: ${turnIndex}\n` +
         `Validation failures: ${issues.join("; ")}\n` +
         `Your previous answer: ${badReply}\n` +
@@ -432,7 +513,7 @@ function parseProposedTurns(text) {
   return Math.max(0, Math.min(10, Math.floor(n)));
 }
 
-async function decideNextTurns(theme, leftCfg, rightCfg, transcript) {
+async function decideNextTurns(theme, interactionMode, leftCfg, rightCfg, transcript) {
   const ask = (speakerName, agentPrompt) => {
     const agentPromptTags = parseAgentPromptTags(agentPrompt);
     const agentPromptBlock = agentPromptTags.length
@@ -445,12 +526,14 @@ async function decideNextTurns(theme, leftCfg, rightCfg, transcript) {
         content:
           `You are ${speakerName}. Decide whether the brainstorm needs extra turns. ` +
           "Return only an integer from 0 to 10." +
+          `\nInteraction mode: ${interactionModeGuidance(interactionMode)}` +
           agentPromptBlock,
       },
       {
         role: "user",
         content:
           `Theme: ${theme}\n` +
+          `Mode: ${interactionMode}\n` +
           "Transcript:\n" +
           `${transcriptText(transcript)}\n\n` +
           "How many additional turns are needed? Return only an integer.",
@@ -470,7 +553,7 @@ async function decideNextTurns(theme, leftCfg, rightCfg, transcript) {
   return { left, right, decided };
 }
 
-function buildFinalReviewMessages(theme, reviewCfg, transcript) {
+function buildFinalReviewMessages(theme, interactionMode, reviewCfg, transcript) {
   const agentPromptTags = parseAgentPromptTags(reviewCfg.agentPrompt);
   const agentPromptBlock = agentPromptTags.length
     ? `\nAgent prompt instructions: ${agentPromptTags.join(" | ")}`
@@ -482,12 +565,14 @@ function buildFinalReviewMessages(theme, reviewCfg, transcript) {
       content:
         `You are ${reviewCfg.name}, an expert facilitator. ` +
         "Produce one structured, comprehensive review from the full discussion." +
+        `\nInteraction mode: ${interactionModeGuidance(interactionMode)}` +
         agentPromptBlock,
     },
     {
       role: "user",
       content:
-        `Theme: ${theme}\n\n` +
+        `Theme: ${theme}\n` +
+        `Mode: ${interactionMode}\n\n` +
         "Discussion transcript:\n" +
         `${transcriptText(transcript)}\n\n` +
         "Create a final review with sections: Summary, Key Agreements, Key Disagreements, Risks, Actionable Plan.",
@@ -495,11 +580,12 @@ function buildFinalReviewMessages(theme, reviewCfg, transcript) {
   ];
 }
 
-async function generateTurnWithValidation(token, theme, active, other, transcript, turnNumber, msgNode) {
+async function generateTurnWithValidation(token, theme, interactionMode, active, other, transcript, turnNumber, msgNode) {
   const otherLast = lastMessageByAuthor(transcript, other.name) || "";
 
   let messages = buildTurnPrompt(
     theme,
+    interactionMode,
     active.agentPrompt,
     active.name,
     other.name,
@@ -529,6 +615,7 @@ async function generateTurnWithValidation(token, theme, active, other, transcrip
 
     messages = buildRetryTurnPrompt(
       theme,
+      interactionMode,
       active.agentPrompt,
       active.name,
       other.name,
@@ -562,6 +649,8 @@ async function generateTurnWithValidation(token, theme, active, other, transcrip
 
 async function runDebate() {
   const theme = els.theme.value.trim();
+  const interactionMode = els.interactionMode.value;
+  const reviewEnabled = els.reviewEnabled.checked;
 
   const leftCfg = {
     name: els.leftDisplayName.value.trim() || "Left Analyst",
@@ -587,13 +676,16 @@ async function runDebate() {
     return;
   }
 
-  if (!leftCfg.modelId || !rightCfg.modelId || !reviewCfg.modelId) {
+  if (!leftCfg.modelId || !rightCfg.modelId || (reviewEnabled && !reviewCfg.modelId)) {
     alert("Please load/select models first.");
     return;
   }
 
   const token = ++runToken;
+  let finalReviewText = "";
+  lastRunExport = null;
   els.chat.innerHTML = "";
+  autoScrollEnabled = true;
   els.log.textContent = "";
   els.finalReview.value = "";
   els.totalTurns.textContent = "0";
@@ -603,18 +695,20 @@ async function runDebate() {
 
   els.start.disabled = true;
   els.stop.disabled = false;
+  els.downloadJsonBtn.disabled = true;
 
   setStatus("Running");
   addMessage("system", "System", `Theme: ${theme}`);
+  addMessage("system", "System", `Mode: ${interactionMode}`);
   addMessage("system", "System", `Participants: ${leftCfg.name} vs ${rightCfg.name}`);
   addMessage(
     "system",
     "System",
-    `Underlying models selected (local only): left=${leftCfg.modelId}, right=${rightCfg.modelId}, review=${reviewCfg.modelId}`
+    `Underlying models selected (local only): left=${leftCfg.modelId}, right=${rightCfg.modelId}, review=${reviewEnabled ? reviewCfg.modelId : "disabled"}`
   );
   if (leftCfg.agentPrompt) addMessage("system", "System", `${leftCfg.name} agent prompt: ${leftCfg.agentPrompt}`);
   if (rightCfg.agentPrompt) addMessage("system", "System", `${rightCfg.name} agent prompt: ${rightCfg.agentPrompt}`);
-  if (reviewCfg.agentPrompt) addMessage("system", "System", `Review agent prompt: ${reviewCfg.agentPrompt}`);
+  if (reviewEnabled && reviewCfg.agentPrompt) addMessage("system", "System", `Review agent prompt: ${reviewCfg.agentPrompt}`);
 
   const transcript = [];
   let turnsThisBlock = Math.max(1, Math.floor(initialTurns));
@@ -641,7 +735,7 @@ async function runDebate() {
         const turnNumber = totalTurns + 1;
         const msgNode = addMessage(side, active.name, "");
 
-        const text = await generateTurnWithValidation(token, theme, active, other, transcript, turnNumber, msgNode);
+        const text = await generateTurnWithValidation(token, theme, interactionMode, active, other, transcript, turnNumber, msgNode);
 
         if (token !== runToken) {
           throw new Error("Run stopped");
@@ -665,7 +759,7 @@ async function runDebate() {
       }
 
       setStatus("Evaluating outcome");
-      const outcome = await decideNextTurns(theme, leftCfg, rightCfg, transcript);
+      const outcome = await decideNextTurns(theme, interactionMode, leftCfg, rightCfg, transcript);
       els.lastOutcome.textContent = `left=${outcome.left}, right=${outcome.right}, decided=${outcome.decided}`;
 
       addMessage(
@@ -687,11 +781,11 @@ async function runDebate() {
       els.extensionCount.textContent = String(extensionsUsed);
     }
 
-    if (completed && token === runToken && transcript.length > 0) {
+    if (reviewEnabled && completed && token === runToken && transcript.length > 0) {
       setStatus("Streaming final review");
       log(`Compiling final review with ${reviewCfg.modelId}`);
       const reviewNode = addMessage("system", "Final Review", "");
-      const reviewMessages = buildFinalReviewMessages(theme, reviewCfg, transcript);
+      const reviewMessages = buildFinalReviewMessages(theme, interactionMode, reviewCfg, transcript);
 
       const review = await ollamaChatStream(reviewCfg.modelId, reviewMessages, (full) => {
         if (token !== runToken) return;
@@ -700,9 +794,13 @@ async function runDebate() {
       });
 
       els.finalReview.value = review;
+      finalReviewText = review;
       log("Final review completed.");
     }
 
+    if (!reviewEnabled && completed) {
+      addMessage("system", "System", "Review Agent is disabled. Skipping final review.");
+    }
     setStatus("Completed");
   } catch (err) {
     if (String(err.message) === "Run stopped") {
@@ -714,13 +812,58 @@ async function runDebate() {
       log(`Error: ${err.message || err}`);
     }
   } finally {
+    if (transcript.length > 0) {
+      lastRunExport = {
+        exportedAt: new Date().toISOString(),
+        theme,
+        interactionMode,
+        initialTurns,
+        maxExtensions,
+        totalTurns,
+        extensionsUsed,
+        lastOutcome: els.lastOutcome.textContent,
+        leftAgent: leftCfg,
+        rightAgent: rightCfg,
+        reviewEnabled,
+        reviewAgent: reviewCfg,
+        transcript,
+        finalReview: finalReviewText || els.finalReview.value,
+      };
+      els.downloadJsonBtn.disabled = false;
+    }
+
     els.start.disabled = false;
     els.stop.disabled = true;
   }
 }
 
 resizeThemeInput(false);
+syncReviewControls();
+scrollChatToBottom(true);
 loadModels();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
