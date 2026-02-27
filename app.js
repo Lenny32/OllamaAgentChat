@@ -106,27 +106,53 @@ function textToHtml(text) {
 function renderMessageBubble(bubbleEl, text) {
   const raw = String(text || "");
   const segments = [];
-  const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+
+  const openTagRe = /<think\b[^>]*>/gi;
+  const closeTagRe = /<\/think>/gi;
   let cursor = 0;
-  let match;
+  let inThink = false;
 
-  while ((match = thinkRe.exec(raw)) !== null) {
-    const before = raw.slice(cursor, match.index);
-    if (before) {
-      segments.push(`<span>${textToHtml(before)}</span>`);
+  while (cursor < raw.length) {
+    if (!inThink) {
+      openTagRe.lastIndex = cursor;
+      const open = openTagRe.exec(raw);
+
+      if (!open) {
+        const rest = raw.slice(cursor);
+        if (rest || segments.length === 0) {
+          segments.push(`<span>${textToHtml(rest)}</span>`);
+        }
+        break;
+      }
+
+      const normalPart = raw.slice(cursor, open.index);
+      if (normalPart) {
+        segments.push(`<span>${textToHtml(normalPart)}</span>`);
+      }
+
+      cursor = openTagRe.lastIndex;
+      inThink = true;
+      continue;
     }
 
-    const thinkBody = (match[1] || "").trim();
-    if (thinkBody) {
-      segments.push(`<span class="think-block">${textToHtml(thinkBody)}</span>`);
+    closeTagRe.lastIndex = cursor;
+    const close = closeTagRe.exec(raw);
+
+    if (!close) {
+      const thinkPart = raw.slice(cursor).trim();
+      if (thinkPart) {
+        segments.push(`<span class="think-block">${textToHtml(thinkPart)}</span>`);
+      }
+      break;
     }
 
-    cursor = thinkRe.lastIndex;
-  }
+    const thinkPart = raw.slice(cursor, close.index).trim();
+    if (thinkPart) {
+      segments.push(`<span class="think-block">${textToHtml(thinkPart)}</span>`);
+    }
 
-  const tail = raw.slice(cursor);
-  if (tail || segments.length === 0) {
-    segments.push(`<span>${textToHtml(tail)}</span>`);
+    cursor = closeTagRe.lastIndex;
+    inThink = false;
   }
 
   bubbleEl.innerHTML = segments.join("");
@@ -1195,6 +1221,7 @@ syncReviewControls();
 scrollChatToBottom(true);
 loadModels();
 refreshSavedRuns();
+
 
 
 
