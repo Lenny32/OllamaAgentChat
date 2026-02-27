@@ -1,5 +1,6 @@
 const OLLAMA_CHAT_URL = "http://localhost:11434/api/chat";
 const OLLAMA_TAGS_URL = "http://localhost:11434/api/tags";
+const STORAGE_API_BASE = "/api";
 
 const DEFAULT_LEFT_MODEL = "gemma3:1b";
 const DEFAULT_RIGHT_MODEL = "gemma3:1b";
@@ -19,6 +20,9 @@ const els = {
   reviewModel: document.getElementById("reviewModel"),
   refreshModelsBtn: document.getElementById("refreshModelsBtn"),
   downloadJsonBtn: document.getElementById("downloadJsonBtn"),
+  saveDbBtn: document.getElementById("saveDbBtn"),
+  savedRunsSelect: document.getElementById("savedRunsSelect"),
+  loadDbBtn: document.getElementById("loadDbBtn"),
   initialTurns: document.getElementById("initialTurns"),
   maxExtensions: document.getElementById("maxExtensions"),
   start: document.getElementById("startBtn"),
@@ -37,6 +41,7 @@ const els = {
 let runToken = 0;
 let autoScrollEnabled = true;
 let lastRunExport = null;
+let savedRunId = null;
 
 els.start.addEventListener("click", () => runDebate());
 els.stop.addEventListener("click", () => {
@@ -45,7 +50,12 @@ els.stop.addEventListener("click", () => {
 });
 els.refreshModelsBtn.addEventListener("click", () => loadModels());
 els.downloadJsonBtn.addEventListener("click", () => downloadRunJson());
+els.saveDbBtn.addEventListener("click", () => saveCurrentRunToDatabase());
+els.loadDbBtn.addEventListener("click", () => loadSelectedRunFromDatabase());
 els.reviewEnabled.addEventListener("change", () => syncReviewControls());
+els.savedRunsSelect.addEventListener("change", () => {
+  els.loadDbBtn.disabled = !els.savedRunsSelect.value;
+});
 
 els.theme.addEventListener("focus", () => resizeThemeInput(true));
 els.theme.addEventListener("input", () => resizeThemeInput(true));
@@ -80,18 +90,92 @@ function scrollChatToBottom(force = false) {
   });
 }
 
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function textToHtml(text) {
+  return escapeHtml(text).replace(/\r?\n/g, "<br>");
+}
+
+function renderMessageBubble(bubbleEl, text) {
+  const raw = String(text || "");
+  const segments = [];
+  const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+  let cursor = 0;
+  let match;
+
+  while ((match = thinkRe.exec(raw)) !== null) {
+    const before = raw.slice(cursor, match.index);
+    if (before) {
+      segments.push(`<span>${textToHtml(before)}</span>`);
+    }
+
+    const thinkBody = (match[1] || "").trim();
+    if (thinkBody) {
+      segments.push(`<span class="think-block">${textToHtml(thinkBody)}</span>`);
+    }
+
+    cursor = thinkRe.lastIndex;
+  }
+
+  const tail = raw.slice(cursor);
+  if (tail || segments.length === 0) {
+    segments.push(`<span>${textToHtml(tail)}</span>`);
+  }
+
+  bubbleEl.innerHTML = segments.join("");
+}
+
+function stripThinkBlocks(text) {
+  return String(text || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractThinkBlocks(text) {
+  const raw = String(text || "");
+  const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+  const parts = [];
+  let match;
+
+  while ((match = thinkRe.exec(raw)) !== null) {
+    const thinkBody = (match[1] || "").trim();
+    if (thinkBody) {
+      parts.push(thinkBody);
+    }
+  }
+
+  return parts.join("\n\n").trim();
+}
+
+function splitThinkingAndAnswer(text) {
+  const rawText = String(text || "");
+  return {
+    rawText,
+    cleanText: stripThinkBlocks(rawText),
+    thinkingText: extractThinkBlocks(rawText),
+  };
+}
+
 function addMessage(side, author, text = "") {
   const node = els.msgTpl.content.firstElementChild.cloneNode(true);
   node.classList.add(side);
   node.querySelector(".meta").textContent = author;
-  node.querySelector(".bubble").textContent = text;
+  renderMessageBubble(node.querySelector(".bubble"), text);
   els.chat.appendChild(node);
   scrollChatToBottom();
   return node;
 }
 
 function updateMessage(node, text) {
-  node.querySelector(".bubble").textContent = text;
+  renderMessageBubble(node.querySelector(".bubble"), text);
   scrollChatToBottom();
 }
 
@@ -150,6 +234,230 @@ function downloadRunJson() {
   URL.revokeObjectURL(url);
 }
 
+async function apiRequest(path, options = {}) {
+  const req = {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  };
+
+  const res = await fetch(`${STORAGE_API_BASE}${path}`, req);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || `Persistence API error (${res.status})`);
+  }
+
+  if (res.status === 204) {
+    return null;
+  }
+
+  return res.json();
+}
+
+function makeRunSummary(run) {
+  const when = new Date(run.exportedAt || run.createdAt).toLocaleString();
+  const theme = (run.theme || "").trim() || "(untitled)";
+  const shortTheme = theme.length > 56 ? `${theme.slice(0, 53)}...` : theme;
+  const turns = Number.isFinite(Number(run.totalTurns)) ? Number(run.totalTurns) : 0;
+  return `${when} | ${shortTheme} | ${turns} turns`;
+}
+
+async function refreshSavedRuns(selectedId = null) {
+  try {
+    const payload = await apiRequest("/runs");
+    const runs = Array.isArray(payload?.runs) ? payload.runs : [];
+
+    els.savedRunsSelect.innerHTML = "";
+    if (!runs.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No saved chats";
+      els.savedRunsSelect.appendChild(opt);
+      els.loadDbBtn.disabled = true;
+      return;
+    }
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select saved chat";
+    els.savedRunsSelect.appendChild(placeholder);
+
+    runs.forEach((run) => {
+      const opt = document.createElement("option");
+      opt.value = String(run.id);
+      opt.textContent = makeRunSummary(run);
+      els.savedRunsSelect.appendChild(opt);
+    });
+
+    if (selectedId !== null && selectedId !== undefined) {
+      els.savedRunsSelect.value = String(selectedId);
+    }
+
+    els.loadDbBtn.disabled = !els.savedRunsSelect.value;
+  } catch (err) {
+    log(`Could not load saved chats: ${err.message || err}`);
+  }
+}
+
+function ensureSelectHasValue(selectEl, value) {
+  if (!value) return;
+
+  const exists = Array.from(selectEl.options).some((opt) => opt.value === value);
+  if (exists) {
+    selectEl.value = value;
+    return;
+  }
+
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = `${value} (saved)`;
+  selectEl.appendChild(opt);
+  selectEl.value = value;
+}
+
+function applyLoadedRunToUi(run) {
+  els.theme.value = run.theme || "";
+  els.interactionMode.value = run.interactionMode || "open";
+  els.initialTurns.value = String(run.initialTurns ?? 6);
+  els.maxExtensions.value = String(run.maxExtensions ?? 3);
+
+  els.leftDisplayName.value = run.leftAgent?.name || "Analyst Left";
+  els.rightDisplayName.value = run.rightAgent?.name || "Analyst Right";
+  els.leftAgentPrompt.value = run.leftAgent?.agentPrompt || "";
+  els.rightAgentPrompt.value = run.rightAgent?.agentPrompt || "";
+
+  els.reviewEnabled.checked = Boolean(run.reviewEnabled);
+  els.reviewAgentPrompt.value = run.reviewAgent?.agentPrompt || "";
+  syncReviewControls();
+
+  ensureSelectHasValue(els.leftModel, run.leftAgent?.modelId || "");
+  ensureSelectHasValue(els.rightModel, run.rightAgent?.modelId || "");
+  ensureSelectHasValue(els.reviewModel, run.reviewAgent?.modelId || "");
+
+  els.chat.innerHTML = "";
+  addMessage("system", "System", `Loaded chat #${run.id} from SQLite`);
+  addMessage("system", "System", `Theme: ${run.theme}`);
+  addMessage("system", "System", `Mode: ${run.interactionMode}`);
+
+  (run.transcript || []).forEach((entry) => {
+    const author = entry.author || "Agent";
+    const side = author === (run.leftAgent?.name || "")
+      ? "left"
+      : author === (run.rightAgent?.name || "")
+        ? "right"
+        : "system";
+    addMessage(side, author, entry.rawText || entry.text || "");
+  });
+
+  els.totalTurns.textContent = String(run.totalTurns ?? (run.transcript || []).length);
+  els.extensionCount.textContent = String(run.extensionsUsed ?? 0);
+  els.lastOutcome.textContent = run.lastOutcome || "-";
+  els.finalReview.value = run.finalReview || "";
+  els.blockTurns.textContent = String(run.initialTurns ?? "-");
+
+  lastRunExport = {
+    exportedAt: run.exportedAt,
+    theme: run.theme,
+    interactionMode: run.interactionMode,
+    initialTurns: run.initialTurns,
+    maxExtensions: run.maxExtensions,
+    totalTurns: run.totalTurns,
+    extensionsUsed: run.extensionsUsed,
+    lastOutcome: run.lastOutcome,
+    leftAgent: run.leftAgent,
+    rightAgent: run.rightAgent,
+    reviewEnabled: run.reviewEnabled,
+    reviewAgent: run.reviewAgent,
+    transcript: run.transcript || [],
+    finalReview: run.finalReview || "",
+  };
+
+  savedRunId = run.id;
+  els.downloadJsonBtn.disabled = !lastRunExport;
+  els.saveDbBtn.disabled = !lastRunExport;
+  setStatus("Loaded saved chat");
+  resizeThemeInput(false);
+}
+
+async function startRunInDatabase(runConfig) {
+  try {
+    const payload = await apiRequest("/runs/start", {
+      method: "POST",
+      body: JSON.stringify(runConfig),
+    });
+
+    savedRunId = payload?.id ?? null;
+    if (savedRunId) {
+      log(`Started persisted run in SQLite (id=${savedRunId})`);
+      await refreshSavedRuns(savedRunId);
+    }
+  } catch (err) {
+    savedRunId = null;
+    log(`Could not start persisted run: ${err.message || err}`);
+  }
+}
+
+async function persistMessageToDatabase(runId, message) {
+  if (!runId) return;
+
+  try {
+    await apiRequest(`/runs/${runId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(message),
+    });
+  } catch (err) {
+    log(`Could not persist message: ${err.message || err}`);
+  }
+}
+
+async function updateRunInDatabase(runId, runPatch) {
+  if (!runId) return;
+
+  try {
+    await apiRequest(`/runs/${runId}`, {
+      method: "PATCH",
+      body: JSON.stringify(runPatch),
+    });
+  } catch (err) {
+    log(`Could not update persisted run: ${err.message || err}`);
+  }
+}
+
+async function saveCurrentRunToDatabase(runCompleted = false) {
+  if (!lastRunExport || !savedRunId) {
+    return;
+  }
+
+  await updateRunInDatabase(savedRunId, {
+    exportedAt: lastRunExport.exportedAt,
+    totalTurns: lastRunExport.totalTurns,
+    extensionsUsed: lastRunExport.extensionsUsed,
+    lastOutcome: lastRunExport.lastOutcome,
+    finalReview: lastRunExport.finalReview,
+    completed: runCompleted,
+  });
+
+  log(`Synced run metadata to SQLite (id=${savedRunId})`);
+  await refreshSavedRuns(savedRunId);
+}
+
+async function loadSelectedRunFromDatabase() {
+  const id = Number(els.savedRunsSelect.value);
+  if (!id) return;
+
+  try {
+    const payload = await apiRequest(`/runs/${id}`);
+    if (!payload?.run) {
+      throw new Error("Run not found");
+    }
+    applyLoadedRunToUi(payload.run);
+  } catch (err) {
+    addMessage("system", "Error", `Load from SQLite failed: ${err.message || err}`);
+    log(`Load from SQLite failed: ${err.message || err}`);
+  }
+}
 async function fetchAvailableModels() {
   const res = await fetch(OLLAMA_TAGS_URL);
   if (!res.ok) {
@@ -508,7 +816,8 @@ function buildRetryTurnPrompt(
 }
 
 function parseProposedTurns(text) {
-  const n = Number((text.match(/-?\d+/) || ["0"])[0]);
+  const cleanText = stripThinkBlocks(text);
+  const n = Number((cleanText.match(/-?\d+/) || ["0"])[0]);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(10, Math.floor(n)));
 }
@@ -593,13 +902,14 @@ async function generateTurnWithValidation(token, theme, interactionMode, active,
     turnNumber
   );
 
-  let text = await ollamaChatStream(active.modelId, messages, (full) => {
+  let rawText = await ollamaChatStream(active.modelId, messages, (full) => {
     if (token !== runToken) return;
     updateMessage(msgNode, full);
   });
+  let split = splitThinkingAndAnswer(rawText);
 
-  let validation = validateTurnOutput(text, active.name, other.name, active.agentPrompt, otherLast);
-  if (isNearDuplicate(text, transcript, active.name)) {
+  let validation = validateTurnOutput(split.cleanText, active.name, other.name, active.agentPrompt, otherLast);
+  if (isNearDuplicate(split.cleanText, transcript, active.name)) {
     validation.blocking.push("near-duplicate of recent turn");
   }
 
@@ -620,18 +930,19 @@ async function generateTurnWithValidation(token, theme, interactionMode, active,
       active.name,
       other.name,
       transcript,
-      text,
+      split.cleanText,
       turnNumber,
       validation.blocking
     );
 
-    text = await ollamaChatStream(active.modelId, messages, (full) => {
+    rawText = await ollamaChatStream(active.modelId, messages, (full) => {
       if (token !== runToken) return;
       updateMessage(msgNode, full);
     });
+    split = splitThinkingAndAnswer(rawText);
 
-    validation = validateTurnOutput(text, active.name, other.name, active.agentPrompt, otherLast);
-    if (isNearDuplicate(text, transcript, active.name)) {
+    validation = validateTurnOutput(split.cleanText, active.name, other.name, active.agentPrompt, otherLast);
+    if (isNearDuplicate(split.cleanText, transcript, active.name)) {
       validation.blocking.push("near-duplicate of recent turn");
     }
 
@@ -644,9 +955,8 @@ async function generateTurnWithValidation(token, theme, interactionMode, active,
     log(`${active.name} still weak after retries: ${validation.blocking.join(", ")}`);
   }
 
-  return text;
+  return split;
 }
-
 async function runDebate() {
   const theme = els.theme.value.trim();
   const interactionMode = els.interactionMode.value;
@@ -684,6 +994,7 @@ async function runDebate() {
   const token = ++runToken;
   let finalReviewText = "";
   lastRunExport = null;
+  savedRunId = null;
   els.chat.innerHTML = "";
   autoScrollEnabled = true;
   els.log.textContent = "";
@@ -696,8 +1007,20 @@ async function runDebate() {
   els.start.disabled = true;
   els.stop.disabled = false;
   els.downloadJsonBtn.disabled = true;
+  els.saveDbBtn.disabled = true;
 
   setStatus("Running");
+  await startRunInDatabase({
+    exportedAt: new Date().toISOString(),
+    theme,
+    interactionMode,
+    initialTurns,
+    maxExtensions,
+    reviewEnabled,
+    leftAgent: leftCfg,
+    rightAgent: rightCfg,
+    reviewAgent: reviewCfg,
+  });
   addMessage("system", "System", `Theme: ${theme}`);
   addMessage("system", "System", `Mode: ${interactionMode}`);
   addMessage("system", "System", `Participants: ${leftCfg.name} vs ${rightCfg.name}`);
@@ -735,17 +1058,30 @@ async function runDebate() {
         const turnNumber = totalTurns + 1;
         const msgNode = addMessage(side, active.name, "");
 
-        const text = await generateTurnWithValidation(token, theme, interactionMode, active, other, transcript, turnNumber, msgNode);
+        const turnResult = await generateTurnWithValidation(token, theme, interactionMode, active, other, transcript, turnNumber, msgNode);
 
         if (token !== runToken) {
           throw new Error("Run stopped");
         }
 
-        transcript.push({ author: active.name, text });
+        transcript.push({
+          author: active.name,
+          text: turnResult.cleanText,
+          rawText: turnResult.rawText,
+          thinkingText: turnResult.thinkingText,
+        });
 
         totalTurns += 1;
         els.totalTurns.textContent = String(totalTurns);
         log(`${active.name} completed turn ${totalTurns}`);
+        await persistMessageToDatabase(savedRunId, {
+          turnIndex: totalTurns,
+          messageType: "agent",
+          author: active.name,
+          rawText: turnResult.rawText,
+          thinkingText: turnResult.thinkingText,
+          answerText: turnResult.cleanText,
+        });
       }
 
       if (token !== runToken) {
@@ -769,6 +1105,11 @@ async function runDebate() {
       );
 
       log(`Outcome decided: ${outcome.decided}`);
+      await updateRunInDatabase(savedRunId, {
+        totalTurns,
+        extensionsUsed,
+        lastOutcome: els.lastOutcome.textContent,
+      });
 
       if (outcome.decided <= 0) {
         log("Outcome is 0. Ending.");
@@ -787,15 +1128,25 @@ async function runDebate() {
       const reviewNode = addMessage("system", "Final Review", "");
       const reviewMessages = buildFinalReviewMessages(theme, interactionMode, reviewCfg, transcript);
 
-      const review = await ollamaChatStream(reviewCfg.modelId, reviewMessages, (full) => {
+      const reviewRaw = await ollamaChatStream(reviewCfg.modelId, reviewMessages, (full) => {
         if (token !== runToken) return;
-        els.finalReview.value = full;
+        els.finalReview.value = stripThinkBlocks(full);
         updateMessage(reviewNode, full);
       });
 
+      const reviewParts = splitThinkingAndAnswer(reviewRaw);
+      const review = reviewParts.cleanText;
       els.finalReview.value = review;
       finalReviewText = review;
       log("Final review completed.");
+      await persistMessageToDatabase(savedRunId, {
+        turnIndex: totalTurns + 1,
+        messageType: "review",
+        author: "Final Review",
+        rawText: reviewParts.rawText,
+        thinkingText: reviewParts.thinkingText,
+        answerText: reviewParts.cleanText,
+      });
     }
 
     if (!reviewEnabled && completed) {
@@ -830,6 +1181,8 @@ async function runDebate() {
         finalReview: finalReviewText || els.finalReview.value,
       };
       els.downloadJsonBtn.disabled = false;
+      els.saveDbBtn.disabled = false;
+      await saveCurrentRunToDatabase(completed);
     }
 
     els.start.disabled = false;
@@ -841,6 +1194,40 @@ resizeThemeInput(false);
 syncReviewControls();
 scrollChatToBottom(true);
 loadModels();
+refreshSavedRuns();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

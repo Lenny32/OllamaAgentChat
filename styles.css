@@ -46,7 +46,7 @@ body {
 }
 
 .global-row {
-  grid-template-columns: auto minmax(240px, 1fr) 96px 98px 98px auto auto auto auto;
+  grid-template-columns: auto minmax(240px, 1fr) 96px 98px 98px auto auto auto minmax(180px, 240px) auto auto;
 }
 
 .agent-row {
@@ -132,6 +132,15 @@ button {
 }
 
 button.secondary { background: #7c8491; }
+.saved-runs-select {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  padding: 5px 7px;
+  color: var(--ink);
+  font-size: 13px;
+}
 button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .layout {
@@ -174,6 +183,11 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .message.right .bubble { background: var(--right); }
 .message.system { max-width: 100%; text-align: center; align-self: center; }
 .message.system .bubble { background: #f8eadf; }
+.bubble .think-block {
+  display: block;
+  color: #8a8f99;
+  font-style: italic;
+}
 
 .side {
   border: 1px solid var(--border);
@@ -213,7 +227,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 @media (max-width: 1300px) {
   .global-row {
-    grid-template-columns: auto minmax(220px, 1fr) 96px 98px 98px auto auto;
+    grid-template-columns: auto minmax(220px, 1fr) 96px 98px 98px auto auto auto;
   }
 
   .global-row #stopBtn {
@@ -248,6 +262,9 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
     margin-bottom: 2px;
   }
 }
+
+
+
 
 
 

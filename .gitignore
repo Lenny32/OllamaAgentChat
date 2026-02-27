@@ -1,0 +1,3 @@
+chat_history.sqlite3
+__pycache__/
+*.pyc

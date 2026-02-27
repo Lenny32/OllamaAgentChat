@@ -2,7 +2,7 @@
 
 Ollama Debate Room is a local-first web app where two Ollama models discuss a topic turn-by-turn, and an optional Review Agent can synthesize the discussion at the end.
 
-Everything runs locally against your Ollama server.
+Everything runs locally against your Ollama server, and chats can now be persisted into a local SQLite database file.
 
 ## Highlights
 
@@ -10,41 +10,54 @@ Everything runs locally against your Ollama server.
 - Two-agent discussion with alternating turns.
 - Optional Review Agent (disabled by default).
 - Live token streaming in the chat UI.
-- Smart auto-scroll:
-  - If you scroll up, auto-scroll pauses.
-  - If you return to the bottom, auto-scroll resumes.
 - Interaction modes:
   - `Open`
   - `Debate`
   - `Collaboration`
 - Per-agent prompts (`Agent Prompt`) for instruction/persona control.
 - Export full session as JSON (`Download JSON`).
+- Persist and reload chats from SQLite (`Save Chat`, `Load Chat`).
+- Automatic persistence lifecycle: run row is created at start, then each message is inserted incrementally.
+
+## Persistence
+
+Saved runs are written to:
+
+- `chat_history.sqlite3` (in the project root)
+
+Each saved run includes:
+
+- Theme
+- Interaction mode
+- Agent names
+- Agent models
+- Agent prompts
+- Review config and final review
+- Full discussion transcript
+- Run metadata (turn counts/outcome)
+
+### Incremental Persistence Lifecycle
+
+1. `POST /api/runs/start` when the user clicks `Start`.
+2. `POST /api/runs/{id}/messages` after each streamed agent turn.
+3. `POST /api/runs/{id}/messages` for the final review (when enabled).
+4. `PATCH /api/runs/{id}` as run metadata evolves and when run ends.
+
+### Thinking vs Answer Storage
+
+Model output can include `<think>...</think>` blocks.
+
+- `raw_text`: full model output as received.
+- `thinking_text`: extracted `<think>` content only.
+- `answer_text`: cleaned answer with `<think>` removed.
+
+Only `answer_text` is reused for future context/validation. Thinking content is shown in UI for transparency but excluded from conversational memory.
 
 ## Model Selection Behavior
 
-- The app loads models from `GET /api/tags`.
+- The app loads models from `GET /api/tags` on your Ollama server.
 - Default preferred model is `gemma3:1b` for all selectors.
 - If `gemma3:1b` is not available, it falls back to the first available local model.
-- If no models are installed, the app shows a message with:
-
-```bash
-ollama pull gemma3:1b
-```
-
-## How It Works
-
-1. Enter a theme (short or long text).
-2. Pick mode (`Open`, `Debate`, `Collaboration`).
-3. Configure Left and Right agents (name, model, optional agent prompt).
-4. Optionally enable Review Agent and configure it.
-5. Set initial turns and max extensions.
-6. Start:
-   - Agents alternate turns.
-   - After each block, both suggest additional turns.
-   - The app calculates next turns from those suggestions.
-7. End:
-   - If Review Agent is enabled, final synthesis is generated.
-   - If disabled, run ends without synthesis.
 
 ## Run Locally
 
@@ -60,25 +73,32 @@ ollama serve
 ollama pull gemma3:1b
 ```
 
-3. Serve this folder (example):
+3. Start the app server (serves UI + SQLite API):
 
 ```bash
-python -m http.server 8080
+python server.py
 ```
 
-4. Open `http://localhost:8080`.
+4. Open `http://127.0.0.1:8080`.
 
 ## Files
 
 - `index.html`: UI structure and controls.
 - `styles.css`: layout and styling.
-- `app.js`: orchestration, model loading, streaming, validation, export.
+- `app.js`: orchestration, model loading, streaming, validation, export, persistence integration.
+- `server.py`: local HTTP server + SQLite persistence API.
 - `README.md`: project docs.
 
 ## Endpoints Used
 
 - `GET http://localhost:11434/api/tags`
 - `POST http://localhost:11434/api/chat`
+- `GET /api/runs`
+- `GET /api/runs/{id}`
+- `POST /api/runs/start`
+- `POST /api/runs/{id}/messages`
+- `PATCH /api/runs/{id}`
+- `POST /api/runs` (legacy bulk save)
 
 ## Notes
 
@@ -90,3 +110,7 @@ PowerShell example:
 $env:OLLAMA_ORIGINS="*"
 ollama serve
 ```
+
+
+
+

@@ -33,6 +33,11 @@
         </label>
         <button id="refreshModelsBtn" class="secondary" type="button">Refresh Models</button>
         <button id="downloadJsonBtn" class="secondary" type="button" disabled>Download JSON</button>
+        <button id="saveDbBtn" class="secondary" type="button" disabled>Save Chat</button>
+        <select id="savedRunsSelect" class="saved-runs-select" aria-label="Saved chats">
+          <option value="">No saved chats</option>
+        </select>
+        <button id="loadDbBtn" class="secondary" type="button" disabled>Load Chat</button>
         <button id="startBtn">Start</button>
         <button id="stopBtn" class="secondary" disabled>Stop</button>
       </div>
@@ -112,5 +117,7 @@
   <script src="app.js"></script>
 </body>
 </html>
+
+
 
 
